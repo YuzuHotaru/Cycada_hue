@@ -8,6 +8,10 @@ import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
 
+from PIL import Image
+from torchvision import transforms
+
+from . import cams_loss
 
 class CycleGANModel(BaseModel):
     def name(self):
@@ -29,7 +33,7 @@ class CycleGANModel(BaseModel):
     def __init__(self, opt):
         BaseModel.__init__(self, opt)
         # specify the training losses you want to print out. The program will call base_model.get_current_losses
-        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'sem_A', 'rec_sem_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'sem_B', 'rec_sem_B', 'hue','G']
+        self.loss_names = ['D_A', 'G_A', 'cycle_A', 'idt_A', 'sem_A', 'rec_sem_A', 'D_B', 'G_B', 'cycle_B', 'idt_B', 'sem_B', 'rec_sem_B', 'cams','G']
         # specify the images you want to save/display. The program will call base_model.get_current_visuals
 
         # specify the models you want to save to the disk. The program will call base_model.save_networks and base_model.load_networks
@@ -157,15 +161,17 @@ class CycleGANModel(BaseModel):
         self.loss_rec_sem_A = self.compute_semantic_loss(rec_A_feat, real_A_feat) * lambda_A * self.opt.lambda_semantic #lys
         self.loss_rec_sem_B = self.compute_semantic_loss(rec_B_feat, real_B_feat) * lambda_B * self.opt.lambda_semantic #lys
         
-        self.loss_hue = self.compute_hue_loss(self.real_A, self.real_B) #hue_loss
-        self.loss_hue = Variable(self.loss_hue,requires_grad=True)
+        #self.loss_hue = self.compute_hue_loss(self.real_A, self.real_B) #hue_loss
+        #self.loss_hue = Variable(self.loss_hue,requires_grad=True)
+        self.loss_cams = self.compute_cams_loss(self.real_A, self.real_B)
+        self.loss_cams = Variable(self.loss_cams,requires_grad=True)
 
         self.loss_sem_A = self.compute_semantic_loss(fake_B_feat, real_A_feat) * 0.5 #lys
         self.loss_sem_B = self.compute_semantic_loss(fake_A_feat, real_B_feat) * 0.5 #lys
         
         # combined loss
         #self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B + self.loss_sem_A +self.loss_sem_B + self.loss_rec_sem_A + self.loss_rec_sem_B
-        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B + self.loss_sem_A +self.loss_sem_B + self.loss_rec_sem_A + self.loss_rec_sem_B + self.loss_hue
+        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B + self.loss_sem_A +self.loss_sem_B + self.loss_rec_sem_A + self.loss_rec_sem_B + self.loss_cams
         #self.loss_G = Variable(self.loss_G,requires_grad=True)
         self.loss_G.backward()
 
@@ -203,6 +209,26 @@ class CycleGANModel(BaseModel):
         mean[:, 2, :, :] = 122.67891434
         batch = batch.sub(Variable(mean).to(self.device))  # subtract mean
         return batch
+
+    def tensor_to_pil(self,im):
+        img_norm = im
+        img_unnorm = img_norm/2 + 0.5
+        to_PILimage = transforms.ToPILImage()
+        img_restored = to_PILimage(img_unnorm)
+        return img_restored
+
+    def compute_cams_loss(self,input,target):
+        batchsize= input.shape[0]
+        cams_sum = 0
+        for i in range(batchsize):
+            input_pil = self.tensor_to_pil(input[i])
+            target_pil = self.tensor_to_pil(target[i])
+            cams = cams_loss.cams_loss(input_pil,target_pil)
+            cams_sum += cams
+        avg_cams_loss = cams_sum/batchsize
+        avg_cams_tensor = torch.tensor(avg_cams_loss)
+        return avg_cams_tensor
+
 
     def compute_hue_loss(self, real_B, fake_B):
         real_b_boxes = self.box_down(real_B)		# get 9x9 boxes
